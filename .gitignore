@@ -1,0 +1,28 @@
+## OS / editor
+.DS_Store
+.vscode/
+
+## Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+## Env / secrets
+.env
+*.env
+
+## Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+## Logs
+*.log
+
+## Frontend (future)
+node_modules/
+dist/
+build/

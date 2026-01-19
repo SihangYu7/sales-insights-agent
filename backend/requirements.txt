@@ -1,0 +1,15 @@
+# Web Framework
+flask==3.0.0
+flask-cors==4.0.0
+
+# AI & LangChain (Updated for Python 3.14 compatibility)
+openai>=2.15.0
+langchain>=1.2.6
+langchain-openai>=1.1.7
+langchain-community>=0.4.1
+
+# Database
+sqlalchemy>=2.0.45
+
+# Utilities
+python-dotenv==1.0.0
