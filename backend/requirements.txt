@@ -11,5 +11,15 @@ langchain-community>=0.4.1
 # Database
 sqlalchemy>=2.0.45
 
+# Databricks (optional - for production)
+databricks-sql-connector>=2.9.0
+
+# Authentication
+bcrypt==4.1.2
+PyJWT==2.8.0
+
+# Production Server
+gunicorn==21.2.0
+
 # Utilities
 python-dotenv==1.0.0

@@ -10,9 +10,9 @@ KEY CONCEPTS:
 - ORM: Maps Python classes to database tables
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, Date, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Date, DateTime, Boolean, Text, ForeignKey, text
 from sqlalchemy.orm import sessionmaker, declarative_base
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import random
 
 # Database setup
@@ -78,6 +78,104 @@ class Sale(Base):
             "sale_date": str(self.sale_date),
             "region": self.region
         }
+
+
+class User(Base):
+    """
+    Users table - stores user authentication information
+
+    Example row:
+    | id | email              | password_hash | name     | created_at          | is_active |
+    | 1  | user@example.com   | $2b$12$...    | John Doe | 2024-01-15 10:30:00 | True      |
+    """
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    name = Column(String(100))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    is_active = Column(Boolean, default=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "name": self.name,
+            "created_at": str(self.created_at) if self.created_at else None,
+            "is_active": self.is_active
+        }
+
+
+class QueryHistory(Base):
+    """
+    Query history table - stores user queries for history and analytics
+
+    Example row:
+    | id | user_id | question          | answer        | sql_query       | agent_type | created_at |
+    | 1  | 1       | Total sales?      | $204,593.89   | SELECT SUM(...) | text_to_sql| 2024-01-15 |
+    """
+    __tablename__ = "query_history"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    answer = Column(Text)
+    sql_query = Column(Text)
+    agent_type = Column(String(50))  # 'text_to_sql' or 'tool_agent'
+    cache_hit = Column(Boolean, default=False)
+    duration_seconds = Column(Float)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "question": self.question,
+            "answer": self.answer,
+            "sql_query": self.sql_query,
+            "agent_type": self.agent_type,
+            "cache_hit": self.cache_hit,
+            "duration_seconds": self.duration_seconds,
+            "created_at": str(self.created_at) if self.created_at else None
+        }
+
+
+def save_query_history(user_id: int, question: str, answer: str, sql_query: str = None,
+                       agent_type: str = None, cache_hit: bool = False, duration_seconds: float = None):
+    """Save a query to history."""
+    db = SessionLocal()
+    try:
+        history = QueryHistory(
+            user_id=user_id,
+            question=question,
+            answer=answer,
+            sql_query=sql_query,
+            agent_type=agent_type,
+            cache_hit=cache_hit,
+            duration_seconds=duration_seconds
+        )
+        db.add(history)
+        db.commit()
+        return history.to_dict()
+    except Exception as e:
+        db.rollback()
+        print(f"Error saving query history: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def get_user_query_history(user_id: int, limit: int = 50):
+    """Get query history for a user."""
+    db = SessionLocal()
+    try:
+        history = db.query(QueryHistory).filter(
+            QueryHistory.user_id == user_id
+        ).order_by(QueryHistory.created_at.desc()).limit(limit).all()
+        return [h.to_dict() for h in history]
+    finally:
+        db.close()
 
 
 # =============================================================================
@@ -161,54 +259,26 @@ def run_query(sql_query: str):
     Execute a raw SQL query and return results.
     This is what the AI agent will use!
 
+    Uses the database connector abstraction to support both SQLite and Databricks.
+
     Example:
         results = run_query("SELECT * FROM products WHERE category = 'Electronics'")
     """
-    db = SessionLocal()
-    try:
-        result = db.execute(text(sql_query))
-        # Get column names
-        columns = result.keys()
-        # Fetch all rows and convert to list of dicts
-        rows = [dict(zip(columns, row)) for row in result.fetchall()]
-        return rows
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
+    from db_connector import get_database_connector
+    connector = get_database_connector()
+    return connector.execute_query(sql_query)
 
 
 def get_schema_info():
     """
     Returns information about the database schema.
     The AI agent needs this to know what tables/columns exist!
+
+    Uses the database connector abstraction to support both SQLite and Databricks.
     """
-    return """
-    DATABASE SCHEMA:
-
-    Table: products
-    - id (INTEGER, primary key)
-    - name (TEXT) - product name like 'Laptop', 'Smartphone'
-    - category (TEXT) - category like 'Electronics', 'Furniture', 'Books'
-    - price (REAL) - price in dollars
-
-    Table: sales
-    - id (INTEGER, primary key)
-    - product_id (INTEGER) - references products.id
-    - quantity (INTEGER) - number of items sold
-    - total (REAL) - total sale amount in dollars
-    - sale_date (DATE) - when the sale happened
-    - region (TEXT) - 'North', 'South', 'East', or 'West'
-
-    RELATIONSHIPS:
-    - sales.product_id links to products.id
-    - To get product names with sales, JOIN the tables
-
-    EXAMPLE QUERIES:
-    - Total sales: SELECT SUM(total) FROM sales
-    - Sales by region: SELECT region, SUM(total) FROM sales GROUP BY region
-    - Top products: SELECT p.name, SUM(s.total) FROM sales s JOIN products p ON s.product_id = p.id GROUP BY p.name ORDER BY SUM(s.total) DESC
-    """
+    from db_connector import get_database_connector
+    connector = get_database_connector()
+    return connector.get_schema_info()
 
 
 # =============================================================================

@@ -30,11 +30,16 @@ from datetime import datetime, timedelta
 # LangChain imports
 from langchain_core.tools import Tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_openai import ChatOpenAI
 
 # Database imports
 from database import run_query, get_schema_info
 from langchain_agent import is_safe_sql
+
+# Middleware imports
+from middleware.callbacks import create_callback_handlers, MetricsCallbackHandler
+from middleware.cache import get_cached_response, cache_response
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -73,6 +78,9 @@ def query_database_tool(query: str) -> str:
 
         # Execute query
         results = run_query(query)
+
+        if isinstance(results, dict) and results.get("error"):
+            return f"Error executing query: {results['error']}"
 
         if not results:
             return "Query executed successfully but returned no results."
@@ -312,7 +320,10 @@ date_tool = Tool(
 # =============================================================================
 # LEARNING POINT 3: Agent Creation with Tools
 # =============================================================================
-def create_agent_with_tools(verbose: bool = True):
+def create_agent_with_tools(
+    verbose: bool = True,
+    callbacks: List[BaseCallbackHandler] = None
+):
     """
     Create a LangChain agent with our custom tools.
 
@@ -329,15 +340,17 @@ def create_agent_with_tools(verbose: bool = True):
 
     Args:
         verbose: If True, print agent's reasoning process
+        callbacks: Optional list of LangChain callback handlers for middleware
 
     Returns:
         Callable: LLM with bound tools
     """
-    # Initialize the LLM
+    # Initialize the LLM with optional callbacks
     llm = ChatOpenAI(
         model="gpt-3.5-turbo",
         temperature=0,  # Deterministic reasoning
-        openai_api_key=os.getenv("OPENAI_API_KEY")
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        callbacks=callbacks
     )
 
     # Define available tools
@@ -358,7 +371,14 @@ def create_agent_with_tools(verbose: bool = True):
 # =============================================================================
 # LEARNING POINT 4: Using the Agent
 # =============================================================================
-def agent_with_tools(question: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+def agent_with_tools(
+    question: str,
+    conversation_history: List[Dict] = None,
+    user_id: int = None,
+    user_email: str = None,
+    callbacks: List[BaseCallbackHandler] = None,
+    use_cache: bool = True
+) -> Dict[str, Any]:
     """
     Main function: Answer questions using the tool-equipped agent.
 
@@ -371,24 +391,54 @@ def agent_with_tools(question: str, conversation_history: List[Dict] = None) -> 
     Args:
         question: User's question
         conversation_history: Previous messages (optional)
+        user_id: User ID for context tracking and caching
+        user_email: User email for logging
+        callbacks: Optional list of callback handlers (uses defaults if None)
+        use_cache: Whether to use response caching
 
     Returns:
         dict: Response with answer, tools used, and metadata
 
     Example:
-        >>> result = agent_with_tools("What's the average price of Electronics?")
+        >>> result = agent_with_tools("What's the average price of Electronics?", user_id=123)
         >>> print(result['answer'])
         "Let me check... [Agent queries DB] The average price is $558.32"
     """
     try:
+        # Step 0: Check cache first
+        if use_cache:
+            cached = get_cached_response(
+                question=question,
+                user_id=user_id,
+                agent_type="tool_agent"
+            )
+            if cached:
+                cached["cache_hit"] = True
+                print(f"📦 Cache hit for question: {question[:50]}...")
+                return cached
+
+        # Initialize callbacks if not provided
+        if callbacks is None:
+            callbacks = create_callback_handlers(
+                user_id=user_id,
+                user_email=user_email
+            )
+
+        # Find metrics handler for later retrieval
+        metrics_handler = next(
+            (h for h in callbacks if isinstance(h, MetricsCallbackHandler)),
+            None
+        )
+
         print(f"\n🤖 Agent received question: {question}")
         print("="*70)
 
-        llm_with_tools = create_agent_with_tools(verbose=True)
+        llm_with_tools = create_agent_with_tools(verbose=True, callbacks=callbacks)
         base_llm = ChatOpenAI(
             model="gpt-3.5-turbo",
             temperature=0,
-            openai_api_key=os.getenv("OPENAI_API_KEY")
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            callbacks=callbacks
         )
 
         tools_by_name = {
@@ -429,7 +479,8 @@ def agent_with_tools(question: str, conversation_history: List[Dict] = None) -> 
                 messages.append(response)
                 print("="*70)
                 print("✅ Agent finished!\n")
-                return {
+
+                result = {
                     "success": True,
                     "question": question,
                     "answer": response.content,
@@ -437,8 +488,25 @@ def agent_with_tools(question: str, conversation_history: List[Dict] = None) -> 
                     "results": results_preview,
                     "tools_available": list(tools_by_name.keys()),
                     "tools_used": tools_used,
-                    "agent_type": "Tool-Equipped Agent (Module 5)"
+                    "agent_type": "Tool-Equipped Agent (Module 5)",
+                    "cache_hit": False
                 }
+
+                # Add metrics if available
+                if metrics_handler:
+                    result["metrics"] = metrics_handler.get_metrics()
+
+                # Cache successful response
+                if use_cache:
+                    cache_response(
+                        question=question,
+                        value=result,
+                        user_id=user_id,
+                        agent_type="tool_agent",
+                        ttl=300  # 5 minutes
+                    )
+
+                return result
 
             messages.append(response)
 
@@ -484,7 +552,8 @@ def agent_with_tools(question: str, conversation_history: List[Dict] = None) -> 
             content="Provide a final answer using the tool outputs above. Do not call tools."
         ))
         final_response = base_llm.invoke(messages)
-        return {
+
+        result = {
             "success": True,
             "question": question,
             "answer": final_response.content,
@@ -492,8 +561,25 @@ def agent_with_tools(question: str, conversation_history: List[Dict] = None) -> 
             "results": results_preview,
             "tools_available": list(tools_by_name.keys()),
             "tools_used": tools_used,
-            "agent_type": "Tool-Equipped Agent (Module 5)"
+            "agent_type": "Tool-Equipped Agent (Module 5)",
+            "cache_hit": False
         }
+
+        # Add metrics if available
+        if metrics_handler:
+            result["metrics"] = metrics_handler.get_metrics()
+
+        # Cache successful response
+        if use_cache:
+            cache_response(
+                question=question,
+                value=result,
+                user_id=user_id,
+                agent_type="tool_agent",
+                ttl=300  # 5 minutes
+            )
+
+        return result
 
     except Exception as e:
         print(f"❌ Agent error: {str(e)}")

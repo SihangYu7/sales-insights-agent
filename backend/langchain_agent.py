@@ -20,7 +20,7 @@ User Question → Schema Context → LLM → SQL Query → Validation → Execut
 """
 
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
 # LangChain imports
@@ -29,9 +29,14 @@ from langchain_community.utilities import SQLDatabase
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_core.callbacks import BaseCallbackHandler
 
 # Database imports
 from database import get_schema_info, run_query
+
+# Middleware imports
+from middleware.callbacks import create_callback_handlers, MetricsCallbackHandler
+from middleware.cache import get_cached_response, cache_response
 
 load_dotenv()
 
@@ -48,12 +53,34 @@ def get_langchain_db():
     - Safe query execution
     - Integration with LangChain chains
 
+    Uses the database connector abstraction to support both SQLite and Databricks.
+
     Returns:
         SQLDatabase: LangChain database wrapper
     """
-    # Connect to the same SQLite database we've been using
-    db = SQLDatabase.from_uri("sqlite:///sales.db")
-    return db
+    from db_connector import get_database_connector
+
+    connector = get_database_connector()
+    db_uri = connector.get_langchain_uri()
+    return SQLDatabase.from_uri(db_uri)
+
+
+def get_schema_for_prompt() -> str:
+    """Return schema text for the SQL prompt, handling Databricks gracefully."""
+    from db_connector import get_database_connector
+
+    connector = get_database_connector()
+    if connector.get_db_type() == "databricks":
+        try:
+            db = SQLDatabase.from_uri(connector.get_langchain_uri())
+            return db.get_table_info()
+        except Exception as e:
+            print(f"⚠️ LangChain SQLDatabase connection failed: {e}")
+            print("Using Databricks connector schema info instead.")
+            return connector.get_schema_info()
+
+    db = SQLDatabase.from_uri(connector.get_langchain_uri())
+    return db.get_table_info()
 
 
 # =============================================================================
@@ -148,7 +175,7 @@ SQL Query:"""
 # =============================================================================
 # LEARNING POINT 4: Building the Text-to-SQL Chain
 # =============================================================================
-def create_text_to_sql_chain():
+def create_text_to_sql_chain(callbacks: List[BaseCallbackHandler] = None):
     """
     Create a LangChain chain that converts text to SQL.
 
@@ -165,21 +192,22 @@ def create_text_to_sql_chain():
     - Output parsing is handled
     - Error handling is built-in
 
+    Args:
+        callbacks: Optional list of LangChain callback handlers for middleware
+
     Returns:
         Chain: LangChain runnable chain
     """
-    # Initialize the LLM
+    # Initialize the LLM with optional callbacks
     llm = ChatOpenAI(
         model="gpt-3.5-turbo",
         temperature=0,  # 0 = deterministic (best for SQL generation)
-        openai_api_key=os.getenv("OPENAI_API_KEY")
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        callbacks=callbacks
     )
 
-    # Get database connection
-    db = get_langchain_db()
-
-    # Get schema information
-    schema_info = db.get_table_info()
+    # Get schema information for the prompt
+    schema_info = get_schema_for_prompt()
 
     # Create the prompt
     prompt = create_sql_prompt()
@@ -202,27 +230,38 @@ def create_text_to_sql_chain():
 # =============================================================================
 # LEARNING POINT 5: Main Agent Function
 # =============================================================================
-def text_to_sql_agent(question: str, return_sql: bool = True) -> Dict[str, Any]:
+def text_to_sql_agent(
+    question: str,
+    return_sql: bool = True,
+    user_id: int = None,
+    user_email: str = None,
+    callbacks: List[BaseCallbackHandler] = None,
+    use_cache: bool = True
+) -> Dict[str, Any]:
     """
     Main function: Convert natural language question to SQL and execute it.
 
     AGENT WORKFLOW:
     ---------------
-    1. Receive natural language question
-    2. Generate SQL query using LangChain
+    1. Check cache for existing response
+    2. Generate SQL query using LangChain with callbacks
     3. Validate SQL for safety
     4. Execute query against database
-    5. Return results in human-friendly format
+    5. Cache and return results
 
     Args:
         question: Natural language question (e.g., "What are total sales?")
         return_sql: Whether to include the generated SQL in the response
+        user_id: User ID for context tracking and caching
+        user_email: User email for logging
+        callbacks: Optional list of callback handlers (uses defaults if None)
+        use_cache: Whether to use response caching
 
     Returns:
         dict: Response containing results, SQL, and metadata
 
     Example:
-        >>> result = text_to_sql_agent("What are total sales?")
+        >>> result = text_to_sql_agent("What are total sales?", user_id=123)
         >>> print(result)
         {
             "success": True,
@@ -234,10 +273,35 @@ def text_to_sql_agent(question: str, return_sql: bool = True) -> Dict[str, Any]:
         }
     """
     try:
+        # Step 0: Check cache first
+        if use_cache:
+            cached = get_cached_response(
+                question=question,
+                user_id=user_id,
+                agent_type="text_to_sql"
+            )
+            if cached:
+                cached["cache_hit"] = True
+                print(f"📦 Cache hit for question: {question[:50]}...")
+                return cached
+
+        # Initialize callbacks if not provided
+        if callbacks is None:
+            callbacks = create_callback_handlers(
+                user_id=user_id,
+                user_email=user_email
+            )
+
+        # Find metrics handler for later retrieval
+        metrics_handler = next(
+            (h for h in callbacks if isinstance(h, MetricsCallbackHandler)),
+            None
+        )
+
         # Step 1: Generate SQL query
         print(f"📝 Question: {question}")
 
-        chain = create_text_to_sql_chain()
+        chain = create_text_to_sql_chain(callbacks=callbacks)
         sql_query = chain.invoke(question)
 
         # Clean up the SQL (remove markdown code blocks if present)
@@ -261,22 +325,45 @@ def text_to_sql_agent(question: str, return_sql: bool = True) -> Dict[str, Any]:
 
         # Step 3: Execute SQL
         results = run_query(sql_query)
+        if isinstance(results, dict) and results.get("error"):
+            return {
+                "success": False,
+                "question": question,
+                "error": results["error"],
+                "sql": sql_query if return_sql else None
+            }
+
         print(f"✅ Query executed successfully. Rows returned: {len(results)}")
 
         # Step 4: Format human-friendly answer
         answer = format_results_as_answer(question, results, sql_query)
 
-        # Step 5: Return response
+        # Step 5: Build response
         response = {
             "success": True,
             "question": question,
             "results": results,
             "row_count": len(results),
-            "answer": answer
+            "answer": answer,
+            "cache_hit": False
         }
 
         if return_sql:
             response["sql"] = sql_query
+
+        # Add metrics if available
+        if metrics_handler:
+            response["metrics"] = metrics_handler.get_metrics()
+
+        # Step 6: Cache successful response
+        if use_cache:
+            cache_response(
+                question=question,
+                value=response,
+                user_id=user_id,
+                agent_type="text_to_sql",
+                ttl=300  # 5 minutes
+            )
 
         return response
 
@@ -315,7 +402,10 @@ def format_results_as_answer(question: str, results: List[Dict], sql: str) -> st
         str: Human-friendly answer
     """
     try:
-        # If no results, return a friendly message
+        # If results are missing or not a list, return a friendly message
+        if not isinstance(results, list):
+            return f"Query failed: {results}"
+
         if not results or len(results) == 0:
             return "No results found for your query."
 

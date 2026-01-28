@@ -12,7 +12,18 @@ venv/
 
 ## Env / secrets
 .env
+.env.*
+!.env.example
 *.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
 
 ## Local databases
 *.db
@@ -22,7 +33,7 @@ venv/
 ## Logs
 *.log
 
-## Frontend (future)
+## Frontend
 node_modules/
 dist/
 build/
