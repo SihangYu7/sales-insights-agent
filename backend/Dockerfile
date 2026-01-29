@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Expose port
+# Expose default port (Railway injects PORT)
 EXPOSE 5001
 
-# Run with gunicorn for production
-CMD ["gunicorn", "-b", "0.0.0.0:5001", "-w", "2", "--timeout", "120", "app:app"]
+# Run with gunicorn for production (use PORT env when provided)
+CMD ["sh", "-c", "gunicorn -b 0.0.0.0:${PORT:-5001} -w 2 --timeout 120 app:app"]

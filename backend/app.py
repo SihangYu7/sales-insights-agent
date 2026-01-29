@@ -738,4 +738,5 @@ if __name__ == '__main__':
     print("       -d '{\"question\": \"What are the total sales?\"}'")
     print("\n" + "="*70 + "\n")
 
-    app.run(debug=True, port=5001)
+    port = int(os.getenv("PORT", 5001))
+    app.run(host="0.0.0.0", debug=True, port=port)
