@@ -57,7 +57,11 @@ def add_cors_headers(response):
     """Add CORS headers for Railway deployment."""
     origin = request.headers.get('Origin', '')
     # Allow any Railway subdomain
-    if origin and ('.up.railway.app' in origin or '.railway.app' in origin):
+    if origin and (
+        '.up.railway.app' in origin
+        or '.railway.app' in origin
+        or '.vercel.app' in origin
+    ):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
