@@ -9,7 +9,7 @@ echo "🚀 Starting Sales Insights Agent..."
 
 # Initialize the database (creates tables if not exist)
 echo "📦 Initializing database..."
-python -c "from database import init_db, seed_database; init_db(); seed_database()"
+python3 -c "from database import init_db, seed_database; init_db(); seed_database()"
 
 # Start nginx in the background
 echo "🌐 Starting nginx..."
