@@ -11,12 +11,17 @@ KEY CONCEPTS:
 """
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Float, Date, DateTime, Boolean, Text, ForeignKey, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import date, datetime, timedelta, timezone
 import random
 
 # Database setup
+# Load environment variables from .env if present
+load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 # Defaults to local SQLite; override with DATABASE_URL (e.g., Supabase Postgres)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///sales.db")
 _is_sqlite = DATABASE_URL.startswith("sqlite")
