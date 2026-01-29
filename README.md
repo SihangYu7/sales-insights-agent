@@ -20,8 +20,9 @@
 - [Quick Start](#-quick-start)
 - [Architecture](#-architecture)
 - [API Documentation](#-api-documentation)
-- [Deployment](#-deployment)
 - [Project Structure](#-project-structure)
+- [Live Demo](#-live-demo)
+- [What I Built](#-what-i-built)
 
 ---
 
@@ -34,7 +35,7 @@ This project demonstrates a production-ready AI agent system featuring:
 - **JWT Authentication** with access/refresh tokens
 - **Dual Database Support** - SQLite (dev) / Databricks (prod)
 - **LangChain Middleware** - Logging, rate limiting, caching
-- **Docker & Railway Deployment** ready
+- **Production Hosting** - Vercel (frontend) + Railway (backend)
 
 ### What Can It Do?
 
@@ -74,7 +75,6 @@ Ask questions in plain English and get data-driven answers:
 - ✅ Database abstraction (SQLite ↔ Databricks for sales data)
 - ✅ Supabase Postgres for persistent user sessions
 - ✅ Docker Compose for local development
-- ✅ Railway deployment ready
 
 ### Security
 - ✅ SQL injection prevention
@@ -94,7 +94,7 @@ Ask questions in plain English and get data-driven answers:
 | **Auth** | JWT (bcrypt + PyJWT) |
 | **Sales Data** | SQLite (dev) / Databricks SQL (prod) |
 | **User Sessions** | SQLite (dev) / Supabase Postgres (prod) |
-| **Deployment** | Docker, Railway |
+| **Hosting** | Vercel (frontend), Railway (backend) |
 
 ---
 
@@ -238,63 +238,25 @@ curl -X POST http://localhost:5001/api/ask \
 
 ---
 
-## 🚢 Deployment
+## 🌐 Live Demo
 
-### Docker Compose (Local)
+- Frontend: https://sales-insights-agent.vercel.app
+- Backend: https://sales-insights-agent-production-1ec7.up.railway.app
 
-```bash
-# Build and run
-docker-compose up --build
+**Data stack**
+- Sales data: Databricks SQL (`workspace.default`)
+- User accounts + chat sessions: Supabase Postgres
 
-# Services:
-# - Backend: http://localhost:5001
-# - Frontend: http://localhost:80
-```
+SQLite is used only for local development.
 
-### Railway (Production)
+## ✅ What I Built
 
-```bash
-# Build locally first
-docker build -f Dockerfile.railway -t sales-agent .
-docker run -p 80:80 \
-  -e OPENAI_API_KEY=your-key \
-  -e JWT_SECRET_KEY=your-secret \
-  sales-agent
-```
-
-**Deploy to Railway:**
-1. Push to GitHub
-2. Create Railway project from repo
-3. Set Dockerfile path: `Dockerfile.railway`
-4. Add environment variables in Railway dashboard
-5. Deploy → Get URL like `your-app.up.railway.app`
-
-### Databricks Integration (Sales Data)
-
-1. Create tables in Databricks using `backend/databricks_setup.sql`
-2. Set environment variables:
-   ```bash
-   USE_DATABRICKS=true
-   DATABRICKS_SERVER_HOSTNAME=your-workspace.cloud.databricks.com
-   DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-id
-   DATABRICKS_ACCESS_TOKEN=your-token
-   DATABRICKS_CATALOG=workspace
-   DATABRICKS_SCHEMA=default
-   ```
-3. Restart server → Check `/api/health` shows `"database_type": "databricks"`
-
-### Supabase Integration (User Sessions)
-
-1. Create a Supabase project at [supabase.com](https://supabase.com)
-2. Get your connection string from Project Settings → Database
-3. Set environment variable:
-   ```bash
-   DATABASE_URL=postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres
-   ```
-4. Tables are auto-created on startup: `users`, `chat_sessions`, `query_history`
-5. Chat history persists across sessions with Claude-like conversation interface
-
-**Note:** SQLite is used for local development. Supabase is recommended for production to persist user sessions across deployments.
+- Full‑stack AI analytics app with React + Flask.
+- Text‑to‑SQL agent (LangChain) with safe‑query validation.
+- Tool‑enabled agent for multi‑step reasoning and calculations.
+- JWT auth with refresh tokens and protected endpoints.
+- Persistent chat sessions + history stored in Supabase.
+- Production data integration using Databricks SQL.
 
 ---
 
