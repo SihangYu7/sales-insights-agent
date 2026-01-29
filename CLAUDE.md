@@ -12,8 +12,8 @@ AI Sales Analytics Agent - A full-stack application with React frontend and Flas
 - **Backend:** Flask REST API + SQLAlchemy + LangChain
 - **Auth:** JWT (bcrypt + PyJWT)
 - **AI:** OpenAI GPT-3.5-Turbo + LangChain agents
-- **Database:** SQLite (dev) / Databricks SQL (production)
-- **Data Platform:** Databricks (SQL Warehouse, optional Delta Lake)
+- **Sales Data:** SQLite (dev) / Databricks SQL (production)
+- **User/Session Data:** SQLite (dev) / Supabase Postgres (production)
 - **Deployment:** Docker + Railway
 
 ## Build and Run Commands
@@ -67,14 +67,16 @@ Flask API (app.py)
 **Key Files:**
 - `backend/app.py` - Flask REST API with auth endpoints and agent routes
 - `backend/auth.py` - JWT authentication service (bcrypt + PyJWT)
-- `backend/database.py` - SQLAlchemy models (Product, Sale, User, QueryHistory)
+- `backend/database.py` - SQLAlchemy models (Product, Sale, User, QueryHistory, ChatSession)
 - `backend/db_connector.py` - Database abstraction layer (SQLite/Databricks factory pattern)
 - `backend/langchain_agent.py` - LangChain text-to-SQL chain with query validation
 - `backend/tools.py` - Custom LangChain tools and ReAct agent (up to 5 reasoning steps)
 - `backend/middleware/` - LangChain callbacks (logging, metrics, rate limiting, caching)
-- `frontend/` - React + TypeScript + Vite application
+- `frontend/src/pages/Chat.tsx` - Claude-like chat interface with session sidebar
 
-**Database:** SQLite (`sales.db`) or Databricks SQL Warehouse with Products (10 records), Sales (200 records), and Users.
+**Databases:**
+- **Sales Data:** SQLite (`sales.db`) or Databricks SQL Warehouse - Products (10 records), Sales (200 records)
+- **User/Session Data:** SQLite (local) or Supabase Postgres (production) - Users, ChatSessions, QueryHistory
 
 ## API Endpoints
 
@@ -92,6 +94,14 @@ Flask API (app.py)
 | `/api/ask` | POST | Text-to-SQL agent (Module 4) |
 | `/api/agent` | POST | Enhanced agent with tools (Module 5) |
 | `/api/query` | POST | Execute raw SQL SELECT |
+
+### Chat Session Endpoints (Protected - require JWT)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/sessions` | GET | List user's chat sessions |
+| `/api/sessions` | POST | Create new chat session |
+| `/api/sessions/<id>` | GET | Get session with messages |
+| `/api/sessions/<id>` | PUT | Update session title |
 
 ### Data Endpoints (Public)
 | Endpoint | Method | Purpose |
@@ -185,7 +195,11 @@ docker run -p 80:80 \
 OPENAI_API_KEY=your-openai-key
 JWT_SECRET_KEY=your-secret-key  # Generate with: openssl rand -hex 32
 
-# Databricks (optional - for production)
+# Supabase (optional - for production user/session storage)
+DATABASE_URL=postgresql://user:pass@host:5432/postgres  # Supabase connection string
+# If not set, defaults to SQLite (sqlite:///sales.db)
+
+# Databricks (optional - for production sales data)
 USE_DATABRICKS=false  # Set to true to use Databricks instead of SQLite
 DATABRICKS_SERVER_HOSTNAME=your-workspace.cloud.databricks.com
 DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/your-warehouse-id
@@ -198,10 +212,21 @@ VITE_API_URL=http://localhost:5001  # For local development
 # Leave empty for Docker/Railway (nginx proxies /api/)
 ```
 
-## Database Abstraction
+## Database Architecture
 
-The project supports dual database backends:
+The project uses separate databases for different concerns:
+
+**Sales Data (db_connector.py):**
 - **Development:** SQLite (`sales.db`) - no setup required
 - **Production:** Databricks SQL Warehouse - set `USE_DATABRICKS=true`
 
-Database connector in `backend/db_connector.py` abstracts the connection layer.
+**User & Session Data (database.py):**
+- **Development:** SQLite (`sales.db`) - shared with sales data locally
+- **Production:** Supabase Postgres - set `DATABASE_URL` connection string
+- Stores: Users, ChatSessions, QueryHistory
+- Auto-migrates schema for SQLite (adds session_id column if missing)
+
+**Chat Sessions:**
+- Claude-like interface with persistent conversation history
+- Sessions auto-titled from first question
+- Messages grouped by session for easy navigation

@@ -20,7 +20,7 @@ import os
 from datetime import datetime
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
-from database import init_db, seed_database, run_query, get_schema_info, get_db, Product, Sale, save_query_history, get_user_query_history
+from database import init_db, seed_database, run_query, get_schema_info, get_db, Product, Sale, save_query_history, get_user_query_history, create_chat_session, get_user_sessions, get_session_messages, get_session_by_id, update_session_title
 from openai_service import ai_sales_assistant
 from langchain_agent import text_to_sql_agent
 from tools import agent_with_tools  # Module 5 - Now enabled!
@@ -45,7 +45,7 @@ CORS(app, resources={
             "http://127.0.0.1:5173",  # Alternative localhost
             "http://127.0.0.1",       # Alternative localhost
         ],
-        "methods": ["GET", "POST", "OPTIONS"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
     }
@@ -60,7 +60,7 @@ def add_cors_headers(response):
     if origin and ('.up.railway.app' in origin or '.railway.app' in origin):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
 
@@ -287,6 +287,15 @@ def get_products():
 
     Try it: GET http://localhost:5000/api/products
     """
+    if os.getenv("USE_DATABRICKS", "false").lower() == "true":
+        results = run_query("SELECT id, name, category, price FROM products")
+        if isinstance(results, dict) and results.get("error"):
+            return jsonify({"error": results["error"]}), 500
+        return jsonify({
+            "count": len(results),
+            "products": results
+        })
+
     db = get_db()
     products = db.query(Product).all()
     db.close()
@@ -439,6 +448,7 @@ def ask():
     """
     data = request.json
     question = data.get('question', '')
+    session_id = data.get('session_id')
     use_module_3 = data.get('use_basic_mode', False)  # Option to use old Module 3 mode
 
     if not question:
@@ -463,7 +473,8 @@ def ask():
                 sql_query=result.get('sql'),
                 agent_type='text_to_sql',
                 cache_hit=result.get('cache_hit', False),
-                duration_seconds=metrics.get('total_duration_seconds')
+                duration_seconds=metrics.get('total_duration_seconds'),
+                session_id=session_id
             )
 
             return jsonify({
@@ -521,6 +532,7 @@ def agent_endpoint():
     """
     data = request.json
     question = data.get('question', '')
+    session_id = data.get('session_id')
 
     if not question:
         return jsonify({"error": "No question provided"}), 400
@@ -542,7 +554,8 @@ def agent_endpoint():
             sql_query=result.get('sql'),
             agent_type='tool_agent',
             cache_hit=result.get('cache_hit', False),
-            duration_seconds=metrics.get('total_duration_seconds')
+            duration_seconds=metrics.get('total_duration_seconds'),
+            session_id=session_id
         )
 
         return jsonify({
@@ -615,6 +628,82 @@ def get_query_history():
         "history": history,
         "count": len(history)
     })
+
+
+# =============================================================================
+# ROUTE 10: Chat Sessions
+# =============================================================================
+@app.route('/api/sessions', methods=['GET'])
+@require_auth
+def list_sessions():
+    """
+    Get all chat sessions for the current user.
+
+    Try it:
+    curl -H "Authorization: Bearer <token>" http://localhost:5001/api/sessions
+    """
+    sessions = get_user_sessions(g.user_id)
+    return jsonify({
+        "sessions": sessions,
+        "count": len(sessions)
+    })
+
+
+@app.route('/api/sessions', methods=['POST'])
+@require_auth
+def create_session():
+    """
+    Create a new chat session.
+
+    Try it:
+    curl -X POST -H "Authorization: Bearer <token>" http://localhost:5001/api/sessions
+    """
+    session = create_chat_session(g.user_id)
+    if session:
+        return jsonify(session), 201
+    return jsonify({"error": "Failed to create session"}), 500
+
+
+@app.route('/api/sessions/<int:session_id>', methods=['GET'])
+@require_auth
+def get_session(session_id):
+    """
+    Get a specific session with its messages.
+
+    Try it:
+    curl -H "Authorization: Bearer <token>" http://localhost:5001/api/sessions/1
+    """
+    session = get_session_by_id(session_id, g.user_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    messages = get_session_messages(session_id, g.user_id)
+    return jsonify({
+        "session": session,
+        "messages": messages
+    })
+
+
+@app.route('/api/sessions/<int:session_id>', methods=['PUT'])
+@require_auth
+def update_session(session_id):
+    """
+    Update a session's title.
+
+    Try it:
+    curl -X PUT -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+         -d '{"title": "New Title"}' http://localhost:5001/api/sessions/1
+    """
+    data = request.json
+    title = data.get('title')
+
+    if not title:
+        return jsonify({"error": "Title is required"}), 400
+
+    session = update_session_title(session_id, g.user_id, title)
+    if session:
+        return jsonify(session)
+    return jsonify({"error": "Session not found"}), 404
 
 
 # =============================================================================

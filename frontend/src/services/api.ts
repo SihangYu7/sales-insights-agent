@@ -87,4 +87,39 @@ export const getRateLimitStatus = async () => {
   return response.data;
 };
 
+export const getQueryHistory = async (limit: number = 50) => {
+  const response = await api.get(`/api/history?limit=${limit}`);
+  return response.data;
+};
+
+export const getSessions = async () => {
+  const response = await api.get('/api/sessions');
+  return response.data;
+};
+
+export const createSession = async () => {
+  const response = await api.post('/api/sessions');
+  return response.data;
+};
+
+export const getSessionMessages = async (sessionId: number) => {
+  const response = await api.get(`/api/sessions/${sessionId}`);
+  return response.data;
+};
+
+export const updateSessionTitle = async (sessionId: number, title: string) => {
+  const response = await api.put(`/api/sessions/${sessionId}`, { title });
+  return response.data;
+};
+
+export const askQuestionInSession = async (question: string, sessionId: number) => {
+  const response = await api.post('/api/ask', { question, session_id: sessionId });
+  return response.data;
+};
+
+export const askAgentInSession = async (question: string, sessionId: number) => {
+  const response = await api.post('/api/agent', { question, session_id: sessionId });
+  return response.data;
+};
+
 export default api;

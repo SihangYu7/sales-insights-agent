@@ -1,6 +1,6 @@
 # 🤖 AI Sales Analytics Agent
 
-> A full-stack AI-powered sales analytics assistant with React frontend, Flask backend, LangChain agents, JWT authentication, and Databricks integration. Converts natural language questions into SQL queries and provides data-driven insights.
+> A full-stack AI-powered sales analytics assistant with React frontend, Flask backend, LangChain agents, JWT authentication, Databricks integration, and Supabase for persistent chat sessions. Converts natural language questions into SQL queries and provides data-driven insights.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB.svg)](https://react.dev)
@@ -8,6 +8,7 @@
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--3.5-orange.svg)](https://openai.com)
 [![LangChain](https://img.shields.io/badge/LangChain-1.2+-purple.svg)](https://langchain.com)
 [![Databricks](https://img.shields.io/badge/Databricks-SQL-red.svg)](https://databricks.com)
+[![Supabase](https://img.shields.io/badge/Supabase-Postgres-3ECF8E.svg)](https://supabase.com)
 
 ---
 
@@ -51,7 +52,8 @@ Ask questions in plain English and get data-driven answers:
 - ✅ React 18 + TypeScript + Vite
 - ✅ TailwindCSS styling
 - ✅ Login/Register with JWT auth
-- ✅ Interactive chat interface
+- ✅ Claude-like chat interface with session sidebar
+- ✅ Persistent chat history across sessions
 - ✅ Sales dashboard with metrics
 - ✅ Toggle between Simple (SQL) and Advanced (Tools) agents
 
@@ -69,7 +71,8 @@ Ask questions in plain English and get data-driven answers:
 ### Infrastructure
 - ✅ JWT authentication with refresh tokens
 - ✅ LangChain middleware (logging, metrics, caching, rate limiting)
-- ✅ Database abstraction (SQLite ↔ Databricks)
+- ✅ Database abstraction (SQLite ↔ Databricks for sales data)
+- ✅ Supabase Postgres for persistent user sessions
 - ✅ Docker Compose for local development
 - ✅ Railway deployment ready
 
@@ -89,7 +92,8 @@ Ask questions in plain English and get data-driven answers:
 | **Backend** | Flask 3.0, SQLAlchemy, LangChain |
 | **AI/LLM** | OpenAI GPT-3.5-Turbo |
 | **Auth** | JWT (bcrypt + PyJWT) |
-| **Database** | SQLite (dev) / Databricks SQL (prod) |
+| **Sales Data** | SQLite (dev) / Databricks SQL (prod) |
+| **User Sessions** | SQLite (dev) / Supabase Postgres (prod) |
 | **Deployment** | Docker, Railway |
 
 ---
@@ -158,13 +162,13 @@ curl -X POST http://localhost:5001/api/ask \
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    React Frontend (Vite)                         │
-│  • Login/Register  • Dashboard  • Chat Interface                 │
+│  • Login/Register  • Dashboard  • Chat with Session Sidebar      │
 └────────────────────────────┬────────────────────────────────────┘
                              │ HTTP/JSON + JWT
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Flask REST API                                │
-│  • Auth endpoints  • Agent endpoints  • Data endpoints           │
+│  • Auth endpoints  • Agent endpoints  • Session endpoints        │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Middleware Layer                              │
 │  • Logging  • Metrics  • Rate Limiting  • Caching                │
@@ -181,9 +185,12 @@ curl -X POST http://localhost:5001/api/ask \
           │                       └─────────────────────────┘
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              Database Connector (db_connector.py)                │
-│         SQLite (dev)  ←→  Databricks SQL (production)           │
-└─────────────────────────────────────────────────────────────────┘
+│                       Data Layer                                 │
+├────────────────────────────┬────────────────────────────────────┤
+│   Sales Data Connector     │     User/Session Storage           │
+│   (db_connector.py)        │     (database.py)                  │
+│   SQLite ↔ Databricks      │     SQLite ↔ Supabase Postgres     │
+└────────────────────────────┴────────────────────────────────────┘
 ```
 
 ---
@@ -210,6 +217,15 @@ curl -X POST http://localhost:5001/api/ask \
 | `/api/ask` | POST | Text-to-SQL agent (Module 4) |
 | `/api/agent` | POST | Enhanced agent with tools (Module 5) |
 | `/api/query` | POST | Execute raw SQL SELECT |
+
+### Chat Session Endpoints (Protected)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/sessions` | GET | List user's chat sessions |
+| `/api/sessions` | POST | Create new chat session |
+| `/api/sessions/<id>` | GET | Get session with messages |
+| `/api/sessions/<id>` | PUT | Update session title |
 
 ### Data Endpoints (Public)
 
@@ -253,7 +269,7 @@ docker run -p 80:80 \
 4. Add environment variables in Railway dashboard
 5. Deploy → Get URL like `your-app.up.railway.app`
 
-### Databricks Integration
+### Databricks Integration (Sales Data)
 
 1. Create tables in Databricks using `backend/databricks_setup.sql`
 2. Set environment variables:
@@ -266,7 +282,19 @@ docker run -p 80:80 \
    DATABRICKS_SCHEMA=default
    ```
 3. Restart server → Check `/api/health` shows `"database_type": "databricks"`
-4. Note: the SQLite `backend/sales.db` file is for local development only and is not committed to git when using Databricks.
+
+### Supabase Integration (User Sessions)
+
+1. Create a Supabase project at [supabase.com](https://supabase.com)
+2. Get your connection string from Project Settings → Database
+3. Set environment variable:
+   ```bash
+   DATABASE_URL=postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres
+   ```
+4. Tables are auto-created on startup: `users`, `chat_sessions`, `query_history`
+5. Chat history persists across sessions with Claude-like conversation interface
+
+**Note:** SQLite is used for local development. Supabase is recommended for production to persist user sessions across deployments.
 
 ---
 
@@ -312,7 +340,11 @@ sales-insights-agent/
 OPENAI_API_KEY=sk-...
 JWT_SECRET_KEY=...  # Generate: openssl rand -hex 32
 
-# Databricks (optional)
+# Supabase (optional - for persistent sessions in production)
+DATABASE_URL=postgresql://user:pass@host:5432/postgres
+# If not set, defaults to SQLite (sqlite:///sales.db)
+
+# Databricks (optional - for production sales data)
 USE_DATABRICKS=false
 DATABRICKS_SERVER_HOSTNAME=...
 DATABRICKS_HTTP_PATH=...
@@ -341,4 +373,4 @@ VITE_API_URL=http://localhost:5001  # Empty for Docker/Railway
 
 ---
 
-*Built with LangChain, OpenAI, React, Flask, and Databricks*
+*Built with LangChain, OpenAI, React, Flask, Databricks, and Supabase*
