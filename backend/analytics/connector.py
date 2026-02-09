@@ -5,13 +5,23 @@ Factory pattern for supporting multiple database backends:
 - SQLite (development, default)
 - Databricks (production, optional)
 
+Features:
+- Robust table name qualification using regex
+- Connection pooling for Databricks
+- Dynamic schema discovery with caching
+- Proper exception-based error handling
+
 Environment Variables:
-- USE_DATABRICKS: Set to "true" to enable Databricks
+- ANALYTICS_BACKEND: Set to "databricks" or "sqlite" (default: sqlite)
+- USE_DATABRICKS: Legacy flag (true => databricks) if ANALYTICS_BACKEND not set
 - DATABRICKS_SERVER_HOSTNAME: Databricks SQL Warehouse hostname
 - DATABRICKS_HTTP_PATH: SQL Warehouse HTTP path
 - DATABRICKS_ACCESS_TOKEN: Personal access token
 - DATABRICKS_CATALOG: Unity Catalog name (default: "main")
 - DATABRICKS_SCHEMA: Schema name (default: "default")
+- DB_POOL_MIN_SIZE: Min connections in pool (default: 2)
+- DB_POOL_MAX_SIZE: Max connections in pool (default: 10)
+- SCHEMA_CACHE_TTL: Schema cache TTL in seconds (default: 300)
 """
 
 import os
@@ -20,6 +30,11 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+
+from exceptions import QueryExecutionError, DatabaseConnectionError
+from analytics.sql_utils import qualify_table_names
+from analytics.schema import get_schema_discovery
+from config import get_analytics_backend
 
 
 class DatabaseConnector(ABC):
@@ -65,7 +80,18 @@ class SQLiteConnector(DatabaseConnector):
         self.SessionLocal = sessionmaker(bind=self.engine)
 
     def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute a SQL query and return results."""
+        """
+        Execute a SQL query and return results.
+
+        Args:
+            sql: SQL query to execute
+
+        Returns:
+            List of result dicts
+
+        Raises:
+            QueryExecutionError: If query execution fails
+        """
         session = self.SessionLocal()
         try:
             result = session.execute(text(sql))
@@ -73,38 +99,17 @@ class SQLiteConnector(DatabaseConnector):
             rows = [dict(zip(columns, row)) for row in result.fetchall()]
             return rows
         except Exception as e:
-            return {"error": str(e)}
+            raise QueryExecutionError(
+                message=f"Query execution failed: {str(e)}",
+                sql=sql,
+                original_error=e
+            )
         finally:
             session.close()
 
     def get_schema_info(self) -> str:
-        """Return SQLite schema information."""
-        return """
-    DATABASE SCHEMA:
-
-    Table: products
-    - id (INTEGER, primary key)
-    - name (TEXT) - product name like 'Laptop', 'Smartphone'
-    - category (TEXT) - category like 'Electronics', 'Furniture', 'Books'
-    - price (REAL) - price in dollars
-
-    Table: sales
-    - id (INTEGER, primary key)
-    - product_id (INTEGER) - references products.id
-    - quantity (INTEGER) - number of items sold
-    - total (REAL) - total sale amount in dollars
-    - sale_date (DATE) - when the sale happened
-    - region (TEXT) - 'North', 'South', 'East', or 'West'
-
-    RELATIONSHIPS:
-    - sales.product_id links to products.id
-    - To get product names with sales, JOIN the tables
-
-    EXAMPLE QUERIES:
-    - Total sales: SELECT SUM(total) FROM sales
-    - Sales by region: SELECT region, SUM(total) FROM sales GROUP BY region
-    - Top products: SELECT p.name, SUM(s.total) FROM sales s JOIN products p ON s.product_id = p.id GROUP BY p.name ORDER BY SUM(s.total) DESC
-    """
+        """Return SQLite schema information using dynamic discovery."""
+        return get_schema_discovery().get_schema_info(self)
 
     def get_langchain_uri(self) -> str:
         """Return SQLite connection URI."""
@@ -119,7 +124,7 @@ class SQLiteConnector(DatabaseConnector):
         try:
             self.execute_query("SELECT 1")
             return True
-        except Exception:
+        except QueryExecutionError:
             return False
 
     def get_db_type(self) -> str:
@@ -144,7 +149,7 @@ class DatabricksConnector(DatabaseConnector):
                 "DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_ACCESS_TOKEN"
             )
 
-        # Connection caching
+        # Simple connection caching (connection pool available in connection_pool.py if needed)
         self._connection = None
 
         # Health check caching
@@ -152,103 +157,88 @@ class DatabricksConnector(DatabaseConnector):
         self._last_health_check: float = 0
         self._health_check_interval: float = 60  # seconds
 
-    def _get_connection(self):
+    def _get_connection(self, force_new: bool = False):
         """Get or create Databricks connection."""
+        if force_new and self._connection:
+            try:
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
         if self._connection is None:
             try:
                 from databricks import sql as databricks_sql
-
                 self._connection = databricks_sql.connect(
                     server_hostname=self.hostname,
                     http_path=self.http_path,
                     access_token=self.access_token,
                 )
             except ImportError:
-                raise ImportError(
+                raise DatabaseConnectionError(
                     "databricks-sql-connector not installed. "
                     "Run: pip install databricks-sql-connector"
                 )
         return self._connection
 
-    def _qualify_table_name(self, table: str) -> str:
-        """Add catalog.schema prefix to table name."""
-        return f"{self.catalog}.{self.schema}.{table}"
-
     def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute query on Databricks SQL Warehouse."""
+        """
+        Execute query on Databricks SQL Warehouse.
+
+        Args:
+            sql: SQL query to execute
+
+        Returns:
+            List of result dicts
+
+        Raises:
+            DatabaseConnectionError: If connection cannot be acquired
+            QueryExecutionError: If query execution fails
+        """
+        # Qualify table names using robust regex-based approach
+        qualified_sql = qualify_table_names(
+            sql,
+            self.get_table_names(),
+            self.catalog,
+            self.schema
+        )
+
         cursor = None
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
+        for attempt in range(2):
+            try:
+                conn = self._get_connection(force_new=(attempt == 1))
+                cursor = conn.cursor()
+                cursor.execute(qualified_sql)
 
-            # Qualify table names in the query
-            # Simple approach: prefix common table names
-            qualified_sql = sql
-            for table in ["products", "sales"]:
-                # Replace standalone table names (not already qualified)
-                qualified_sql = qualified_sql.replace(
-                    f" {table} ", f" {self._qualify_table_name(table)} "
+                if cursor.description:
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                    return rows
+                return []
+            except DatabaseConnectionError:
+                raise
+            except Exception as e:
+                message = str(e)
+                if (
+                    "Invalid SessionHandle" in message
+                    or "INVALID_STATE" in message
+                ):
+                    self.close()
+                    if attempt == 0:
+                        continue
+                raise QueryExecutionError(
+                    message=f"Query execution failed: {message}",
+                    sql=qualified_sql,
+                    original_error=e
                 )
-                qualified_sql = qualified_sql.replace(
-                    f" {table}\n", f" {self._qualify_table_name(table)}\n"
-                )
-                qualified_sql = qualified_sql.replace(
-                    f"from {table}", f"from {self._qualify_table_name(table)}"
-                )
-                qualified_sql = qualified_sql.replace(
-                    f"FROM {table}", f"FROM {self._qualify_table_name(table)}"
-                )
-                qualified_sql = qualified_sql.replace(
-                    f"join {table}", f"join {self._qualify_table_name(table)}"
-                )
-                qualified_sql = qualified_sql.replace(
-                    f"JOIN {table}", f"JOIN {self._qualify_table_name(table)}"
-                )
-
-            cursor.execute(qualified_sql)
-
-            if cursor.description:
-                columns = [desc[0] for desc in cursor.description]
-                rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-                return rows
-            return []
-        except Exception as e:
-            return {"error": str(e)}
-        finally:
-            if cursor:
-                cursor.close()
+            finally:
+                if cursor:
+                    cursor.close()
+                    cursor = None
 
     def get_schema_info(self) -> str:
-        """Return Databricks schema information."""
-        schema_text = f"""
-    DATABASE SCHEMA (Databricks: {self.catalog}.{self.schema}):
-
-    Table: products
-    - id (BIGINT, primary key)
-    - name (STRING) - product name like 'Laptop', 'Smartphone'
-    - category (STRING) - category like 'Electronics', 'Furniture', 'Books'
-    - price (DOUBLE) - price in dollars
-
-    Table: sales
-    - id (BIGINT, primary key)
-    - product_id (BIGINT) - references products.id
-    - quantity (INT) - number of items sold
-    - total (DOUBLE) - total sale amount in dollars
-    - sale_date (DATE) - when the sale happened
-    - region (STRING) - 'North', 'South', 'East', or 'West'
-
-    RELATIONSHIPS:
-    - sales.product_id links to products.id
-    - To get product names with sales, JOIN the tables
-
-    EXAMPLE QUERIES:
-    - Total sales: SELECT SUM(total) FROM sales
-    - Sales by region: SELECT region, SUM(total) FROM sales GROUP BY region
-    - Top products: SELECT p.name, SUM(s.total) FROM sales s JOIN products p ON s.product_id = p.id GROUP BY p.name ORDER BY SUM(s.total) DESC
-
-    NOTE: Tables are in catalog {self.catalog}, schema {self.schema}
-    """
-        return schema_text
+        """Return Databricks schema information using dynamic discovery."""
+        return get_schema_discovery().get_schema_info(self)
 
     def get_langchain_uri(self) -> str:
         """
@@ -257,7 +247,6 @@ class DatabricksConnector(DatabaseConnector):
         Note: LangChain's SQLDatabase doesn't natively support Databricks well.
         This returns a format that may require custom handling.
         """
-        # Databricks SQLAlchemy format (requires sqlalchemy-databricks)
         return (
             f"databricks://token:{self.access_token}@{self.hostname}:443"
             f"?http_path={self.http_path}&catalog={self.catalog}&schema={self.schema}"
@@ -281,7 +270,7 @@ class DatabricksConnector(DatabaseConnector):
         try:
             result = self.execute_query("SELECT 1 as test")
             self._healthy = isinstance(result, list) and len(result) > 0
-        except Exception as e:
+        except (QueryExecutionError, DatabaseConnectionError) as e:
             print(f"Databricks health check failed: {e}")
             self._healthy = False
 
@@ -306,7 +295,7 @@ _connector_instance: Optional[DatabaseConnector] = None
 def get_database_connector() -> DatabaseConnector:
     """
     Factory function to get the appropriate database connector.
-    Uses USE_DATABRICKS environment variable to determine backend.
+    Uses ANALYTICS_BACKEND (or legacy USE_DATABRICKS) to determine backend.
 
     Returns cached singleton instance for performance.
     """
@@ -315,9 +304,9 @@ def get_database_connector() -> DatabaseConnector:
     if _connector_instance is not None:
         return _connector_instance
 
-    use_databricks = os.getenv("USE_DATABRICKS", "false").lower() == "true"
+    analytics_backend = get_analytics_backend()
 
-    if use_databricks:
+    if analytics_backend == "databricks":
         print("🔗 Initializing Databricks connector...")
         _connector_instance = DatabricksConnector()
     else:

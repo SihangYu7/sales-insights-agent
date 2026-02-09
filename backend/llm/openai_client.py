@@ -26,6 +26,32 @@ load_dotenv()
 # The API key is read from the OPENAI_API_KEY environment variable
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+def _use_responses_api() -> bool:
+    """Return True if Responses API should be used."""
+    return os.getenv("OPENAI_USE_RESPONSES", "false").lower() == "true"
+
+
+def _get_model(default: str = "gpt-3.5-turbo") -> str:
+    """Return the model name from env or default."""
+    return os.getenv("OPENAI_MODEL", default)
+
+
+def _responses_usage(response) -> dict:
+    """Extract usage info from Responses API result if available."""
+    usage = {}
+    usage_obj = getattr(response, "usage", None)
+    if usage_obj:
+        prompt_tokens = getattr(usage_obj, "input_tokens", None)
+        completion_tokens = getattr(usage_obj, "output_tokens", None)
+        total_tokens = getattr(usage_obj, "total_tokens", None)
+        if prompt_tokens is not None:
+            usage["prompt_tokens"] = prompt_tokens
+        if completion_tokens is not None:
+            usage["completion_tokens"] = completion_tokens
+        if total_tokens is not None:
+            usage["total_tokens"] = total_tokens
+    return usage
+
 
 def simple_chat(user_message: str, system_prompt: str = None) -> dict:
     """
@@ -78,31 +104,43 @@ def simple_chat(user_message: str, system_prompt: str = None) -> dict:
         # - temperature: Controls randomness (0 = focused, 1 = creative)
         # - max_tokens: Maximum length of the response
 
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",      # The model to use
-            messages=messages,           # The conversation
-            temperature=0.7,             # Creativity level (0-1)
-            max_tokens=500               # Max response length
-        )
+        model = _get_model()
 
-        # Extract the AI's response
-        answer = response.choices[0].message.content
+        if _use_responses_api():
+            response = client.responses.create(
+                model=model,
+                input=messages,
+                temperature=0.7,
+                max_output_tokens=500
+            )
+            answer = getattr(response, "output_text", "") or ""
+            usage = _responses_usage(response)
+        else:
+            response = client.chat.completions.create(
+                model=model,             # The model to use
+                messages=messages,        # The conversation
+                temperature=0.7,          # Creativity level (0-1)
+                max_tokens=500            # Max response length
+            )
 
-        # LEARNING POINT - Token Usage
-        # -----------------------------
-        # OpenAI charges based on "tokens" (roughly 4 characters = 1 token)
-        # The response includes how many tokens were used
-        usage = {
-            "prompt_tokens": response.usage.prompt_tokens,      # Input cost
-            "completion_tokens": response.usage.completion_tokens,  # Output cost
-            "total_tokens": response.usage.total_tokens        # Total cost
-        }
+            # Extract the AI's response
+            answer = response.choices[0].message.content
+
+            # LEARNING POINT - Token Usage
+            # -----------------------------
+            # OpenAI charges based on "tokens" (roughly 4 characters = 1 token)
+            # The response includes how many tokens were used
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,      # Input cost
+                "completion_tokens": response.usage.completion_tokens,  # Output cost
+                "total_tokens": response.usage.total_tokens        # Total cost
+            }
 
         return {
             "success": True,
             "answer": answer,
             "usage": usage,
-            "model": "gpt-3.5-turbo"
+            "model": model
         }
 
     except Exception as e:
@@ -155,16 +193,31 @@ def chat_with_context(user_message: str, conversation_history: list = None) -> d
             "content": user_message
         })
 
-        # Call OpenAI with the full conversation
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=500
-        )
+        model = _get_model()
 
-        # Get the response
-        answer = response.choices[0].message.content
+        if _use_responses_api():
+            response = client.responses.create(
+                model=model,
+                input=messages,
+                temperature=0.7,
+                max_output_tokens=500
+            )
+            answer = getattr(response, "output_text", "") or ""
+            usage = _responses_usage(response)
+        else:
+            # Call OpenAI with the full conversation
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=500
+            )
+
+            # Get the response
+            answer = response.choices[0].message.content
+            usage = {
+                "total_tokens": response.usage.total_tokens
+            }
 
         # Add the assistant's response to the conversation
         messages.append({
@@ -176,9 +229,7 @@ def chat_with_context(user_message: str, conversation_history: list = None) -> d
             "success": True,
             "answer": answer,
             "conversation_history": messages,  # Return updated history
-            "usage": {
-                "total_tokens": response.usage.total_tokens
-            }
+            "usage": usage
         }
 
     except Exception as e:
@@ -299,7 +350,7 @@ def test_openai_service():
 
 if __name__ == "__main__":
     """
-    This runs when you execute: python openai_service.py
+    This runs when you execute: python openai_client.py
     It's a great way to test your code!
     """
     test_openai_service()

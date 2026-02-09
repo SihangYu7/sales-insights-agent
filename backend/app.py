@@ -20,18 +20,31 @@ import os
 from datetime import datetime
 from flask import Flask, jsonify, request, g
 from flask_cors import CORS
-from database import init_db, seed_database, run_query, get_schema_info, get_db, Product, Sale, save_query_history, get_user_query_history, create_chat_session, get_user_sessions, get_session_messages, get_session_by_id, update_session_title
-from openai_service import ai_sales_assistant
-from langchain_agent import text_to_sql_agent
-from tools import agent_with_tools  # Module 5 - Now enabled!
+from analytics.connector import get_database_connector
+from analytics.query import run_query, get_schema_info
+from analytics.sqlite_db import init_analytics_db, seed_analytics_db
 from auth import (
-    create_user, authenticate_user, refresh_access_token,
-    get_user_by_id, require_auth, optional_auth
+    create_user,
+    authenticate_user,
+    refresh_access_token,
+    get_user_by_id,
+    require_auth,
+    optional_auth,
+    save_query_history,
+    get_user_query_history,
+    create_chat_session,
+    get_user_sessions,
+    get_session_messages,
+    get_session_by_id,
+    update_session_title,
+    init_auth_db,
 )
+from config import get_analytics_backend, get_auth_database_url, use_dev_seed
+from llm.openai_client import ai_sales_assistant
+from llm.text_to_sql import text_to_sql_agent
+from llm.agent import agent_with_tools  # Module 5 - Now enabled!
 from middleware.rate_limiter import rate_limit, check_rate_limit, get_rate_limiter
 from middleware.cache import get_response_cache
-from db_connector import get_database_connector
-
 # Create the Flask application
 app = Flask(__name__)
 
@@ -73,8 +86,23 @@ def add_cors_headers(response):
 # Initialize database when app starts
 # =============================================================================
 print("🗄️  Initializing database...")
-init_db()
-seed_database()
+dev_seed = use_dev_seed()
+auth_db_url = get_auth_database_url()
+analytics_backend = get_analytics_backend()
+
+if dev_seed:
+    if auth_db_url.startswith("sqlite"):
+        init_auth_db()
+    else:
+        print("⚠️  DEV_SEED=true but AUTH_DATABASE_URL is not sqlite; skipping auth init.")
+
+    if analytics_backend == "sqlite":
+        init_analytics_db()
+        seed_analytics_db()
+    else:
+        print("⚠️  DEV_SEED=true but ANALYTICS_BACKEND is not sqlite; skipping analytics seed.")
+else:
+    print("ℹ️  Skipping init/seed (set DEV_SEED=true for local SQLite).")
 
 
 # =============================================================================
@@ -113,11 +141,13 @@ def database_health():
         db_type = connector.get_db_type()
 
         status_code = 200 if is_healthy else 503
+        analytics_backend = get_analytics_backend()
+
         return jsonify({
             "status": "healthy" if is_healthy else "unhealthy",
             "database_type": db_type,
             "timestamp": datetime.utcnow().isoformat(),
-            "use_databricks": os.getenv("USE_DATABRICKS", "false").lower() == "true"
+            "analytics_backend": analytics_backend
         }), status_code
     except Exception as e:
         return jsonify({
@@ -291,22 +321,12 @@ def get_products():
 
     Try it: GET http://localhost:5000/api/products
     """
-    if os.getenv("USE_DATABRICKS", "false").lower() == "true":
-        results = run_query("SELECT id, name, category, price FROM products")
-        if isinstance(results, dict) and results.get("error"):
-            return jsonify({"error": results["error"]}), 500
-        return jsonify({
-            "count": len(results),
-            "products": results
-        })
-
-    db = get_db()
-    products = db.query(Product).all()
-    db.close()
-
+    results = run_query("SELECT id, name, category, price FROM products")
+    if isinstance(results, dict) and results.get("error"):
+        return jsonify({"error": results["error"]}), 500
     return jsonify({
-        "count": len(products),
-        "products": [p.to_dict() for p in products]
+        "count": len(results),
+        "products": results
     })
 
 

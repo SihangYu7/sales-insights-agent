@@ -32,7 +32,8 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.callbacks import BaseCallbackHandler
 
 # Database imports
-from database import get_schema_info, run_query
+from analytics.query import get_schema_info, run_query
+from config import get_openai_model
 
 # Middleware imports
 from middleware.callbacks import create_callback_handlers, MetricsCallbackHandler
@@ -58,7 +59,7 @@ def get_langchain_db():
     Returns:
         SQLDatabase: LangChain database wrapper
     """
-    from db_connector import get_database_connector
+    from analytics.connector import get_database_connector
 
     connector = get_database_connector()
     db_uri = connector.get_langchain_uri()
@@ -67,7 +68,7 @@ def get_langchain_db():
 
 def get_schema_for_prompt() -> str:
     """Return schema text for the SQL prompt, handling Databricks gracefully."""
-    from db_connector import get_database_connector
+    from analytics.connector import get_database_connector
 
     connector = get_database_connector()
     if connector.get_db_type() == "databricks":
@@ -200,7 +201,7 @@ def create_text_to_sql_chain(callbacks: List[BaseCallbackHandler] = None):
     """
     # Initialize the LLM with optional callbacks
     llm = ChatOpenAI(
-        model="gpt-3.5-turbo",
+        model=get_openai_model(),
         temperature=0,  # 0 = deterministic (best for SQL generation)
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         callbacks=callbacks
@@ -418,7 +419,7 @@ def format_results_as_answer(question: str, results: List[Dict], sql: str) -> st
 
         # For more complex results, use LLM to format
         llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
+            model=get_openai_model(),
             temperature=0.7,
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )

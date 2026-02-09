@@ -1,9 +1,9 @@
 # 🤖 AI Sales Analytics Agent
 
-> A full-stack AI-powered sales analytics assistant with React frontend, Flask backend, LangChain agents, JWT authentication, Databricks integration, and Supabase for persistent chat sessions. Converts natural language questions into SQL queries and provides data-driven insights.
+> A full-stack AI sales analytics app with a React frontend and Flask backend. Uses LangChain agents, JWT auth, Databricks for analytics, and Supabase for user sessions. Converts natural language questions into SQL queries and returns data-driven insights.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
-[![React](https://img.shields.io/badge/React-18-61DAFB.svg)](https://react.dev)
+[![React](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev)
 [![Flask](https://img.shields.io/badge/Flask-3.0-green.svg)](https://flask.palletsprojects.com)
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--3.5-orange.svg)](https://openai.com)
 [![LangChain](https://img.shields.io/badge/LangChain-1.2+-purple.svg)](https://langchain.com)
@@ -35,7 +35,7 @@ This project demonstrates a production-ready AI agent system featuring:
 - **JWT Authentication** with access/refresh tokens
 - **Dual Database Support** - SQLite (dev) / Databricks (prod)
 - **LangChain Middleware** - Logging, rate limiting, caching
-- **Production Hosting** - Vercel (frontend) + Railway (backend)
+- **Production Hosting** - Railway (backend)
 
 ### What Can It Do?
 
@@ -50,13 +50,11 @@ Ask questions in plain English and get data-driven answers:
 ## ✨ Features
 
 ### Frontend
-- ✅ React 18 + TypeScript + Vite
-- ✅ TailwindCSS styling
+- ✅ React 19 + Vite + TailwindCSS
 - ✅ Login/Register with JWT auth
-- ✅ Claude-like chat interface with session sidebar
-- ✅ Persistent chat history across sessions
-- ✅ Sales dashboard with metrics
-- ✅ Toggle between Simple (SQL) and Advanced (Tools) agents
+- ✅ Chat UI with session sidebar + editable titles
+- ✅ Agent mode toggle (simple SQL vs advanced tools)
+- ✅ Sales dashboard (summary + breakdowns)
 
 ### Backend - Module 4: Text-to-SQL Agent
 - ✅ Natural language to SQL query conversion
@@ -74,7 +72,6 @@ Ask questions in plain English and get data-driven answers:
 - ✅ LangChain middleware (logging, metrics, caching, rate limiting)
 - ✅ Database abstraction (SQLite ↔ Databricks for sales data)
 - ✅ Supabase Postgres for persistent user sessions
-- ✅ Docker Compose for local development
 
 ### Security
 - ✅ SQL injection prevention
@@ -88,13 +85,13 @@ Ask questions in plain English and get data-driven answers:
 
 | Layer | Technology |
 |-------|------------|
-| **Frontend** | React 18, TypeScript, Vite, TailwindCSS |
+| **Frontend** | React 19, Vite, TailwindCSS |
 | **Backend** | Flask 3.0, SQLAlchemy, LangChain |
 | **AI/LLM** | OpenAI GPT-3.5-Turbo |
 | **Auth** | JWT (bcrypt + PyJWT) |
 | **Sales Data** | SQLite (dev) / Databricks SQL (prod) |
 | **User Sessions** | SQLite (dev) / Supabase Postgres (prod) |
-| **Hosting** | Vercel (frontend), Railway (backend) |
+| **Hosting** | Railway (backend), Vercel (frontend optional) |
 
 ---
 
@@ -119,6 +116,10 @@ Ask questions in plain English and get data-driven answers:
    ```bash
    cp ../.env.example ../.env
    # Edit .env and add your OPENAI_API_KEY and JWT_SECRET_KEY
+   ```
+   For local SQLite data, set:
+   ```bash
+   DEV_SEED=true
    ```
 
 3. **Run backend**
@@ -162,7 +163,7 @@ curl -X POST http://localhost:5001/api/ask \
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    React Frontend (Vite)                         │
-│  • Login/Register  • Dashboard  • Chat with Session Sidebar      │
+│  • Login/Register  • Dashboard  • Chat Sessions                  │
 └────────────────────────────┬────────────────────────────────────┘
                              │ HTTP/JSON + JWT
                              ▼
@@ -188,7 +189,7 @@ curl -X POST http://localhost:5001/api/ask \
 │                       Data Layer                                 │
 ├────────────────────────────┬────────────────────────────────────┤
 │   Sales Data Connector     │     User/Session Storage           │
-│   (db_connector.py)        │     (database.py)                  │
+│   (analytics/connector.py) │     (auth/db.py)                   │
 │   SQLite ↔ Databricks      │     SQLite ↔ Supabase Postgres     │
 └────────────────────────────┴────────────────────────────────────┘
 ```
@@ -240,8 +241,8 @@ curl -X POST http://localhost:5001/api/ask \
 
 ## 🌐 Live Demo
 
-- Frontend: https://sales-insights-agent.vercel.app
 - Backend: https://sales-insights-agent-production-1ec7.up.railway.app
+- Frontend: deploy separately (e.g., Vercel) using `frontend/`
 
 **Data stack**
 - Sales data: Databricks SQL (`workspace.default`)
@@ -251,7 +252,7 @@ SQLite is used only for local development.
 
 ## ✅ What I Built
 
-- Full‑stack AI analytics app with React + Flask.
+- Full-stack AI analytics app with React + Flask.
 - Text‑to‑SQL agent (LangChain) with safe‑query validation.
 - Tool‑enabled agent for multi‑step reasoning and calculations.
 - JWT auth with refresh tokens and protected endpoints.
@@ -266,17 +267,28 @@ SQLite is used only for local development.
 sales-insights-agent/
 ├── backend/
 │   ├── app.py                 # Flask API (auth + agent routes)
-│   ├── auth.py                # JWT authentication
-│   ├── database.py            # SQLAlchemy models
-│   ├── db_connector.py        # Database abstraction (SQLite/Databricks)
-│   ├── langchain_agent.py     # Text-to-SQL agent (Module 4)
-│   ├── tools.py               # Tool-equipped agent (Module 5)
-│   ├── middleware/            # LangChain callbacks
-│   │   ├── callbacks.py       # Logging, metrics handlers
-│   │   ├── cache.py           # Response caching
-│   │   └── rate_limiter.py    # Rate limiting
+│   ├── config.py              # Environment config helpers
+│   ├── auth/                  # Supabase-backed auth/session storage
+│   │   ├── db.py              # AUTH_DATABASE_URL engine/session
+│   │   ├── models.py          # User, ChatSession, QueryHistory
+│   │   └── service.py         # Auth + session services
+│   ├── analytics/             # Databricks/SQLite analytics layer
+│   │   ├── connector.py       # Analytics DB connector
+│   │   ├── schema.py          # Dynamic schema discovery
+│   │   ├── sql_utils.py       # SQL helpers (qualification, parsing)
+│   │   ├── sqlite_db.py       # SQLite models + seed (dev only)
+│   │   ├── connection_pool.py # Databricks connection pool
+│   │   └── query.py           # run_query/get_schema_info wrappers
+│   ├── llm/                   # LLM chain + agent logic
+│   │   ├── text_to_sql.py     # Text-to-SQL agent (Module 4)
+│   │   ├── agent.py           # Tool-equipped agent (Module 5)
+│   │   └── openai_client.py   # OpenAI client (Responses API optional)
+│   ├── exceptions.py          # Custom DB exceptions
+│   ├── database.py            # Compatibility shim (deprecated)
+│   ├── middleware/            # Callbacks + caching + rate limit
 │   ├── databricks_setup.sql   # Databricks table creation
 │   └── requirements.txt
+├── .env.example               # Environment template
 ├── frontend/
 │   ├── src/
 │   │   ├── pages/             # Login, Register, Dashboard, Chat
@@ -284,11 +296,7 @@ sales-insights-agent/
 │   │   ├── context/           # AuthContext
 │   │   └── services/          # API client, auth service
 │   ├── package.json
-│   └── Dockerfile
-├── docker-compose.yml         # Local development
-├── Dockerfile.railway         # Production deployment
-├── nginx.railway.conf         # nginx config for Railway
-├── .env.example               # Environment template
+│   └── vite.config.ts
 ├── CLAUDE.md                  # AI assistant guidance
 └── README.md                  # This file
 ```
@@ -302,20 +310,27 @@ sales-insights-agent/
 OPENAI_API_KEY=sk-...
 JWT_SECRET_KEY=...  # Generate: openssl rand -hex 32
 
+# Optional: model + API mode
+OPENAI_MODEL=gpt-3.5-turbo
+OPENAI_USE_RESPONSES=false
+
 # Supabase (optional - for persistent sessions in production)
-DATABASE_URL=postgresql://user:pass@host:5432/postgres
+AUTH_DATABASE_URL=postgresql://user:pass@host:5432/postgres
 # If not set, defaults to SQLite (sqlite:///sales.db)
 
 # Databricks (optional - for production sales data)
-USE_DATABRICKS=false
+ANALYTICS_BACKEND=sqlite  # or databricks
 DATABRICKS_SERVER_HOSTNAME=...
 DATABRICKS_HTTP_PATH=...
 DATABRICKS_ACCESS_TOKEN=...
 DATABRICKS_CATALOG=workspace
 DATABRICKS_SCHEMA=default
 
-# Frontend
-VITE_API_URL=http://localhost:5001  # Empty for Docker/Railway
+# Development: auto-create and seed local SQLite data
+DEV_SEED=true
+
+# Frontend (.env)
+VITE_API_URL=http://localhost:5001
 ```
 
 ---
@@ -335,4 +350,4 @@ VITE_API_URL=http://localhost:5001  # Empty for Docker/Railway
 
 ---
 
-*Built with LangChain, OpenAI, React, Flask, Databricks, and Supabase*
+*Built with LangChain, OpenAI, Flask, Databricks, and Supabase*

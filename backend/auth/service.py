@@ -17,7 +17,8 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import request, jsonify, g
 
-from database import SessionLocal, User
+from auth.db import SessionLocal
+from auth.models import User, ChatSession, QueryHistory
 
 # Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
@@ -305,3 +306,139 @@ def optional_auth(f):
         return f(*args, **kwargs)
 
     return decorated_function
+
+
+# =============================================================================
+# QUERY HISTORY + SESSION FUNCTIONS
+# =============================================================================
+
+def save_query_history(
+    user_id: int,
+    question: str,
+    answer: str,
+    sql_query: str = None,
+    agent_type: str = None,
+    cache_hit: bool = False,
+    duration_seconds: float = None,
+    session_id: int = None
+):
+    """Save a query to history."""
+    db = SessionLocal()
+    try:
+        history = QueryHistory(
+            user_id=user_id,
+            session_id=session_id,
+            question=question,
+            answer=answer,
+            sql_query=sql_query,
+            agent_type=agent_type,
+            cache_hit=cache_hit,
+            duration_seconds=duration_seconds
+        )
+        db.add(history)
+        db.commit()
+
+        if session_id:
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if session:
+                session.updated_at = datetime.now(timezone.utc)
+                if session.title == "New Chat":
+                    session.title = question[:50] + ("..." if len(question) > 50 else "")
+                db.commit()
+
+        return history.to_dict()
+    except Exception as e:
+        db.rollback()
+        print(f"Error saving query history: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def get_user_query_history(user_id: int, limit: int = 50):
+    """Get query history for a user."""
+    db = SessionLocal()
+    try:
+        history = db.query(QueryHistory).filter(
+            QueryHistory.user_id == user_id
+        ).order_by(QueryHistory.created_at.desc()).limit(limit).all()
+        return [h.to_dict() for h in history]
+    finally:
+        db.close()
+
+
+def create_chat_session(user_id: int, title: str = "New Chat") -> dict:
+    """Create a new chat session for a user."""
+    db = SessionLocal()
+    try:
+        session = ChatSession(user_id=user_id, title=title)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return session.to_dict()
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating chat session: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def get_user_sessions(user_id: int, limit: int = 50) -> list:
+    """Get all chat sessions for a user, ordered by most recent."""
+    db = SessionLocal()
+    try:
+        sessions = db.query(ChatSession).filter(
+            ChatSession.user_id == user_id
+        ).order_by(ChatSession.updated_at.desc()).limit(limit).all()
+        return [s.to_dict() for s in sessions]
+    finally:
+        db.close()
+
+
+def get_session_messages(session_id: int, user_id: int) -> list:
+    """Get all messages in a specific session."""
+    db = SessionLocal()
+    try:
+        messages = db.query(QueryHistory).filter(
+            QueryHistory.session_id == session_id,
+            QueryHistory.user_id == user_id
+        ).order_by(QueryHistory.created_at.asc()).all()
+        return [m.to_dict() for m in messages]
+    finally:
+        db.close()
+
+
+def get_session_by_id(session_id: int, user_id: int) -> dict:
+    """Get a specific session by ID."""
+    db = SessionLocal()
+    try:
+        session = db.query(ChatSession).filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == user_id
+        ).first()
+        return session.to_dict() if session else None
+    finally:
+        db.close()
+
+
+def update_session_title(session_id: int, user_id: int, title: str) -> dict:
+    """Update a session's title."""
+    db = SessionLocal()
+    try:
+        session = db.query(ChatSession).filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == user_id
+        ).first()
+        if session:
+            session.title = title
+            db.commit()
+            db.refresh(session)
+            return session.to_dict()
+        return None
+    except Exception as e:
+        db.rollback()
+        print(f"Error updating session title: {e}")
+        return None
+    finally:
+        db.close()
